@@ -39,7 +39,7 @@ jobs:
 
       # ── Package (unpacked directory, no installer) ─────────
       - name: Package with electron-builder
-        run: npx electron-builder --win --dir
+        run: npx electron-builder --win --dir --publish never
 
       - name: Extract version
         id: version

@@ -38,6 +38,13 @@
   },
   "build": {
     "appId": "com.wmux.app",
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
     "publish": {
       "provider": "github",
       "owner": "amirlehmam",
