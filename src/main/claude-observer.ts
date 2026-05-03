@@ -24,6 +24,7 @@ export interface ClaudeActivity {
   activeSkill: string | null;
   lastTool: string | null;
   lastUpdate: number;
+  isDone: boolean; // true after "Baked for" / "Cost:" — Claude finished responding
 }
 
 const activities = new Map<SurfaceId, ClaudeActivity>();
@@ -46,12 +47,15 @@ const PATTERNS = {
   // "● Bash(...)" or "● plugin:name:tool (MCP)"
   toolUse: /●\s*(Bash|Read|Write|Edit|Grep|Glob|Agent|WebSearch|WebFetch)\s*\(/,
   mcpTool: /●\s*plugin:([^:]+):([^\s]+)/,
+
+  // "✻ Baked for 3m 10s" or "✻ Cost: $0.05" — Claude finished responding
+  responseDone: /✻\s*(Baked for|Cost:)/,
 };
 
 function getOrCreate(surfaceId: SurfaceId): ClaudeActivity {
   let activity = activities.get(surfaceId);
   if (!activity) {
-    activity = { agents: [], activeSkill: null, lastTool: null, lastUpdate: Date.now() };
+    activity = { agents: [], activeSkill: null, lastTool: null, lastUpdate: Date.now(), isDone: false };
     activities.set(surfaceId, activity);
   }
   return activity;
@@ -72,10 +76,20 @@ export function observePtyData(surfaceId: SurfaceId, data: string): void {
     const trimmed = line.trim();
     if (!trimmed) continue;
 
+    // Response done ("✻ Baked for …" / "✻ Cost: …")
+    if (PATTERNS.responseDone.test(trimmed)) {
+      activity.isDone = true;
+      activity.lastTool = null;
+      activity.activeSkill = null;
+      changed = true;
+      continue;
+    }
+
     // Agent batch start
     const batchMatch = trimmed.match(PATTERNS.agentBatchStart);
     if (batchMatch) {
       activity.agents = [];
+      activity.isDone = false;
       changed = true;
       continue;
     }
@@ -130,6 +144,7 @@ export function observePtyData(surfaceId: SurfaceId, data: string): void {
     const toolMatch = trimmed.match(PATTERNS.toolUse);
     if (toolMatch) {
       activity.lastTool = toolMatch[1];
+      activity.isDone = false;
       changed = true;
       continue;
     }
@@ -138,6 +153,7 @@ export function observePtyData(surfaceId: SurfaceId, data: string): void {
     const mcpMatch = trimmed.match(PATTERNS.mcpTool);
     if (mcpMatch) {
       activity.lastTool = `${mcpMatch[1]}:${mcpMatch[2]}`;
+      activity.isDone = false;
       changed = true;
       continue;
     }

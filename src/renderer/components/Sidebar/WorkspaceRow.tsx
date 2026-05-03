@@ -135,11 +135,16 @@ export default function WorkspaceRow({
   // ── Detect "Claude was active but stopped" (shell still says running) ──
   const claudeIsIdle = useMemo(() => {
     if (workspace.shellState !== 'running') return false;
-    if (!hookActivity) return false;
-    const now = Date.now();
-    return now - hookActivity.lastSeen >= ACTIVITY_TTL;
+    // Observer saw "Baked for" / "Cost:" — Claude explicitly finished
+    if (wsActivity?.isDone) return true;
+    // Hook activity went stale — Claude stopped using tools
+    if (hookActivity) {
+      const now = Date.now();
+      return now - hookActivity.lastSeen >= ACTIVITY_TTL;
+    }
+    return false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace.shellState, hookActivity, tick]);
+  }, [workspace.shellState, wsActivity, hookActivity, tick]);
 
   // ── Status text: tool activity > shell state > default ──
   const statusText = useMemo(() => {
