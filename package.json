@@ -1,6 +1,6 @@
 {
   "name": "wmux",
-  "version": "0.7.16",
+  "version": "0.7.17",
   "description": "Windows terminal multiplexer for AI agents",
   "license": "MIT",
   "main": "dist/main/index.js",
@@ -35,21 +35,6 @@
     "uuid": "^11.0.0",
     "ws": "^8.20.0",
     "zustand": "^5.0.0"
-  },
-  "build": {
-    "appId": "com.wmux.app",
-    "files": [
-      "dist/**/*",
-      "package.json"
-    ],
-    "directories": {
-      "output": "release"
-    },
-    "publish": {
-      "provider": "github",
-      "owner": "amirlehmam",
-      "repo": "wmux"
-    }
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
