@@ -105,27 +105,34 @@ export default function WorkspaceRow({
     ? { backgroundColor: customColorTint }
     : {};
 
-  // How long a tool label persists after the last hook/observer event (ms)
-  const ACTIVITY_TTL = 5000;
+  // How long hook-based activity persists after the last event (ms).
+  // Observer-based activity does NOT use a TTL — it persists until the observer
+  // sees Claude explicitly finish (isDone=true, set on "Baked for" / "Cost:").
+  // This keeps status accurate for SSH→tmux→Claude sessions where tmux only
+  // redraws on change and long bash commands produce no output for minutes.
+  const HOOK_TTL = 5000;
 
-  // ── Determine if Claude is actively working (recent hook or observer data) ──
+  // ── Determine if Claude is actively working ──
   const isClaudeActive = useMemo(() => {
+    // Observer: active as long as we've seen a tool use and Claude hasn't finished
+    if (wsActivity?.lastTool && !wsActivity.isDone) return true;
     const now = Date.now();
-    if (hookActivity && now - hookActivity.lastSeen < ACTIVITY_TTL) return true;
-    if (wsActivity && now - wsActivity.lastUpdate < ACTIVITY_TTL) return true;
+    if (hookActivity && now - hookActivity.lastSeen < HOOK_TTL) return true;
+    if (wsActivity && now - wsActivity.lastUpdate < HOOK_TTL) return true;
     return false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hookActivity, wsActivity, tick]);
 
   // ── Current tool label (from observer or hooks) ──
   const currentToolLabel = useMemo(() => {
-    const now = Date.now();
-    // Prefer observer data (more specific — comes from PTY output parsing)
-    if (wsActivity?.lastTool && now - wsActivity.lastUpdate < ACTIVITY_TTL) {
+    // Observer: persist last tool label until Claude explicitly finishes.
+    // No TTL here — tmux sessions can go silent for minutes between tool uses.
+    if (wsActivity?.lastTool && !wsActivity.isDone) {
       return getToolLabel(wsActivity.lastTool);
     }
-    // Fall back to hook data
-    if (hookActivity?.lastTool && now - hookActivity.lastSeen < ACTIVITY_TTL) {
+    // Hook-based: use TTL (hooks fire reliably per tool use)
+    const now = Date.now();
+    if (hookActivity?.lastTool && now - hookActivity.lastSeen < HOOK_TTL) {
       return getToolLabel(hookActivity.lastTool);
     }
     return null;
@@ -140,7 +147,7 @@ export default function WorkspaceRow({
     // Hook activity went stale — Claude stopped using tools
     if (hookActivity) {
       const now = Date.now();
-      return now - hookActivity.lastSeen >= ACTIVITY_TTL;
+      return now - hookActivity.lastSeen >= HOOK_TTL;
     }
     return false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
