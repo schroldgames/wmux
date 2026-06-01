@@ -203,6 +203,15 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
     const wheelHost = terminalRef.current;
     const onWheelCapture = (ev: WheelEvent) => {
       if (ev.deltaY === 0) return;
+      // Only hijack the wheel for scrollback on the NORMAL buffer. Full-screen
+      // TUIs (Claude Code, vim, less, htop…) switch to the ALTERNATE buffer
+      // (DECSET 1049), which has no scrollback — terminal.scrollLines() there is
+      // a no-op. If we still preventDefault/stopPropagation we also suppress
+      // xterm's native behavior of forwarding the wheel to the app (mouse-wheel
+      // reports when mouse tracking is on, otherwise arrow-key sequences), which
+      // is the ONLY way those apps scroll their own content. So on the alt
+      // buffer we fall through and let xterm handle it.
+      if (terminal.buffer.active.type !== 'normal') return;
       ev.preventDefault();
       ev.stopPropagation();
       let amount: number;
