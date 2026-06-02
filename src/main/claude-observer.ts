@@ -7,9 +7,16 @@
 import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS, SurfaceId } from '../shared/types';
 
-// Strip ANSI escape codes from terminal output
+// Strip ANSI/VT escape sequences from terminal output.
+// Handles CSI (colors, cursor, private modes like ?25h), OSC, char-set
+// designations (ESC(B, ESC)0), other 2-char ESC sequences, and \r.
 function stripAnsi(str: string): string {
-  return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+  return str
+    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')   // CSI: ESC [ params letter (incl. ?25h)
+    .replace(/\x1b\][^\x07]*\x07/g, '')         // OSC: ESC ] ... BEL
+    .replace(/\x1b[()][0-9A-Za-z]/g, '')        // Char set: ESC ( X  /  ESC ) X
+    .replace(/\x1b[^[\]()]/g, '')               // Other 2-char ESC sequences
+    .replace(/\r/g, '');                         // Carriage returns
 }
 
 export interface AgentActivity {
