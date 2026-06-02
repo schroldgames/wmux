@@ -89,9 +89,9 @@ export function observePtyData(surfaceId: SurfaceId, data: string): void {
     if (!trimmed) continue;
 
     // Response done ("✻ Baked for …" / "✻ Cost: …")
+    // Only flip isDone — keep lastTool so the sidebar retains the last ● text.
     if (PATTERNS.responseDone.test(trimmed)) {
       activity.isDone = true;
-      activity.lastTool = null;
       activity.activeSkill = null;
       changed = true;
       continue;
