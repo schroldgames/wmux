@@ -82,7 +82,12 @@ export function observePtyData(surfaceId: SurfaceId, data: string): void {
   let changed = false;
   const isFirstObservation = !activities.has(surfaceId);
   const activity = getOrCreate(surfaceId);
-  activity.lastDataTime = Date.now();
+  const now = Date.now();
+  const prevDataTime = activity.lastDataTime;
+  activity.lastDataTime = now;
+  // Broadcast data-flow updates at most once per second so the renderer can
+  // show a responding indicator even during text-only (no ●) responses.
+  const dataFlowChanged = now - prevDataTime > 1000;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -169,7 +174,7 @@ export function observePtyData(surfaceId: SurfaceId, data: string): void {
   // gets a baseline record. Without this, wsActivity stays null forever for
   // sessions where Claude was already idle when wmux attached (no tool use lines
   // will ever flow through, so claudeIsIdle can never trigger).
-  if (changed || isFirstObservation) {
+  if (changed || isFirstObservation || dataFlowChanged) {
     broadcast(surfaceId, activity);
   }
 }
