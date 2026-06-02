@@ -134,7 +134,7 @@ export default function WorkspaceRow({
     // Observer: show last tool label while Claude is running, up to OBSERVER_TTL.
     // Longer than HOOK_TTL to survive silent periods (long bash commands, API calls).
     // Falls back to idle detection when the TTL expires and no finish marker was seen.
-    if (wsActivity?.lastTool && !wsActivity.isDone && now - wsActivity.lastUpdate < OBSERVER_TTL) {
+    if (wsActivity?.lastTool && now - wsActivity.lastUpdate < OBSERVER_TTL) {
       return truncateStatus(wsActivity.lastTool);
     }
     // Hook-based: short TTL (hooks fire reliably once per tool use)
