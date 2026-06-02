@@ -113,6 +113,12 @@ export default function WorkspaceRow({
   // (e.g. tmux was detached, or the finish line was obscured by terminal rendering).
   const HOOK_TTL = 5000;
   const OBSERVER_TTL = 10 * 60 * 1000; // 10 minutes
+  // Grace period for sessions where the observer is watching but has never seen
+  // a tool use line. This covers the case where wmux attached after Claude was
+  // already idle — no tool use or finish marker will ever appear, so we need a
+  // timed fallback. 2 minutes is long enough for Claude's initial thinking phase
+  // before first tool use, but short enough to not feel broken.
+  const NO_TOOL_GRACE = 2 * 60 * 1000; // 2 minutes
 
   // ── Determine if Claude is actively working ──
   const isClaudeActive = useMemo(() => {
@@ -150,6 +156,13 @@ export default function WorkspaceRow({
     if (wsActivity?.lastTool && wsActivity.lastUpdate) {
       const now = Date.now();
       if (now - wsActivity.lastUpdate >= OBSERVER_TTL) return true;
+    }
+    // Observer is watching (got first PTY data) but never saw a tool use.
+    // Covers sessions where wmux attached after Claude was already idle —
+    // no future tool/finish markers will appear so we fall back to a timed grace.
+    if (wsActivity && !wsActivity.lastTool) {
+      const now = Date.now();
+      if (now - wsActivity.lastUpdate >= NO_TOOL_GRACE) return true;
     }
     // Hook activity went stale — Claude stopped using tools
     if (hookActivity) {
