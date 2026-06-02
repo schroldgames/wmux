@@ -105,18 +105,19 @@ export default function WorkspaceRow({
     ? { backgroundColor: customColorTint }
     : {};
 
-  // How long hook-based activity persists after the last event (ms).
-  // Observer-based activity does NOT use a TTL — it persists until the observer
-  // sees Claude explicitly finish (isDone=true, set on "Baked for" / "Cost:").
-  // This keeps status accurate for SSH→tmux→Claude sessions where tmux only
-  // redraws on change and long bash commands produce no output for minutes.
+  // TTLs for activity display.
+  // Hooks fire once per tool use so a short TTL is fine.
+  // Observer data can go silent for minutes during long bash commands, so we
+  // use a much longer TTL. If no tool use is seen for OBSERVER_TTL ms and the
+  // observer never saw an explicit finish marker, we assume Claude has stopped
+  // (e.g. tmux was detached, or the finish line was obscured by terminal rendering).
   const HOOK_TTL = 5000;
+  const OBSERVER_TTL = 10 * 60 * 1000; // 10 minutes
 
   // ── Determine if Claude is actively working ──
   const isClaudeActive = useMemo(() => {
-    // Observer: active as long as we've seen a tool use and Claude hasn't finished
-    if (wsActivity?.lastTool && !wsActivity.isDone) return true;
     const now = Date.now();
+    if (wsActivity?.lastTool && !wsActivity.isDone && now - wsActivity.lastUpdate < OBSERVER_TTL) return true;
     if (hookActivity && now - hookActivity.lastSeen < HOOK_TTL) return true;
     if (wsActivity && now - wsActivity.lastUpdate < HOOK_TTL) return true;
     return false;
@@ -125,13 +126,14 @@ export default function WorkspaceRow({
 
   // ── Current tool label (from observer or hooks) ──
   const currentToolLabel = useMemo(() => {
-    // Observer: persist last tool label until Claude explicitly finishes.
-    // No TTL here — tmux sessions can go silent for minutes between tool uses.
-    if (wsActivity?.lastTool && !wsActivity.isDone) {
+    const now = Date.now();
+    // Observer: show last tool label while Claude is running, up to OBSERVER_TTL.
+    // Longer than HOOK_TTL to survive silent periods (long bash commands, API calls).
+    // Falls back to idle detection when the TTL expires and no finish marker was seen.
+    if (wsActivity?.lastTool && !wsActivity.isDone && now - wsActivity.lastUpdate < OBSERVER_TTL) {
       return getToolLabel(wsActivity.lastTool);
     }
-    // Hook-based: use TTL (hooks fire reliably per tool use)
-    const now = Date.now();
+    // Hook-based: short TTL (hooks fire reliably once per tool use)
     if (hookActivity?.lastTool && now - hookActivity.lastSeen < HOOK_TTL) {
       return getToolLabel(hookActivity.lastTool);
     }
@@ -144,6 +146,11 @@ export default function WorkspaceRow({
     if (workspace.shellState !== 'running') return false;
     // Observer saw "Baked for" / "Cost:" — Claude explicitly finished
     if (wsActivity?.isDone) return true;
+    // Observer TTL expired — finish marker was likely missed (tmux detach, rendering gap)
+    if (wsActivity?.lastTool && wsActivity.lastUpdate) {
+      const now = Date.now();
+      if (now - wsActivity.lastUpdate >= OBSERVER_TTL) return true;
+    }
     // Hook activity went stale — Claude stopped using tools
     if (hookActivity) {
       const now = Date.now();
