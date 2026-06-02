@@ -70,6 +70,7 @@ export function observePtyData(surfaceId: SurfaceId, data: string): void {
   const lines = clean.split('\n');
 
   let changed = false;
+  const isFirstObservation = !activities.has(surfaceId);
   const activity = getOrCreate(surfaceId);
 
   for (const line of lines) {
@@ -161,6 +162,12 @@ export function observePtyData(surfaceId: SurfaceId, data: string): void {
 
   if (changed) {
     activity.lastUpdate = Date.now();
+  }
+  // Broadcast on first observation even without pattern matches so the renderer
+  // gets a baseline record. Without this, wsActivity stays null forever for
+  // sessions where Claude was already idle when wmux attached (no tool use lines
+  // will ever flow through, so claudeIsIdle can never trigger).
+  if (changed || isFirstObservation) {
     broadcast(surfaceId, activity);
   }
 }
