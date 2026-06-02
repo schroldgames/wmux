@@ -8,21 +8,9 @@ function getAllSurfaceIds(tree: SplitNode): string[] {
   return [...getAllSurfaceIds(tree.children[0]), ...getAllSurfaceIds(tree.children[1])];
 }
 
-/** Human-readable label for a tool name */
-function getToolLabel(tool: string): string {
-  switch (tool) {
-    case 'Bash': return 'Running command...';
-    case 'Read': return 'Reading file...';
-    case 'Edit': return 'Editing...';
-    case 'Write': return 'Writing file...';
-    case 'Grep': return 'Searching code...';
-    case 'Glob': return 'Finding files...';
-    case 'Agent': return 'Running agent...';
-    case 'WebSearch': return 'Searching web...';
-    case 'WebFetch': return 'Fetching page...';
-    case 'Skill': return 'Loading skill...';
-    default: return tool.includes(':') ? `MCP: ${tool}` : `${tool}...`;
-  }
+/** Truncate a ● line to fit the sidebar status area */
+function truncateStatus(text: string, max = 55): string {
+  return text.length > max ? text.slice(0, max - 1) + '…' : text;
 }
 
 interface WorkspaceRowProps {
@@ -147,11 +135,11 @@ export default function WorkspaceRow({
     // Longer than HOOK_TTL to survive silent periods (long bash commands, API calls).
     // Falls back to idle detection when the TTL expires and no finish marker was seen.
     if (wsActivity?.lastTool && !wsActivity.isDone && now - wsActivity.lastUpdate < OBSERVER_TTL) {
-      return getToolLabel(wsActivity.lastTool);
+      return truncateStatus(wsActivity.lastTool);
     }
     // Hook-based: short TTL (hooks fire reliably once per tool use)
     if (hookActivity?.lastTool && now - hookActivity.lastSeen < HOOK_TTL) {
-      return getToolLabel(hookActivity.lastTool);
+      return truncateStatus(hookActivity.lastTool);
     }
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps

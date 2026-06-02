@@ -52,9 +52,10 @@ const PATTERNS = {
   // "Skill(name)" or "Skill(ns:name)"
   skillLoad: /Skill\(([^)]+)\)/,
 
-  // "● Bash(…)" / "● NotebookEdit(…)" / "● plugin:ns:tool …" — any tool use.
+  // "● Bash(ls)" / "● Trimmed from 35 entries…" — any ● line from Claude.
+  // Captures full text after the bullet so it can be shown verbatim in the sidebar.
   // Anchored to start of trimmed line so inline ● in response text doesn't match.
-  toolUse: /^●\s+([\w][\w:]*)/,
+  toolUse: /^●\s+(.+)/,
 
   // "✻ Baked for …" / "✻ Crunched for …" / "✻ Cost: …" — Claude finished responding.
   // Anchored to start of trimmed line so inline ✻ in response text doesn't match.
