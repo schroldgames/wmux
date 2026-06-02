@@ -44,12 +44,13 @@ const PATTERNS = {
   // "Skill(name)" or "Skill(ns:name)"
   skillLoad: /Skill\(([^)]+)\)/,
 
-  // "● Bash(...)" or "● plugin:name:tool (MCP)"
-  toolUse: /●\s*(Bash|Read|Write|Edit|Grep|Glob|Agent|WebSearch|WebFetch)\s*\(/,
-  mcpTool: /●\s*plugin:([^:]+):([^\s]+)/,
+  // "● Bash(…)" / "● NotebookEdit(…)" / "● plugin:ns:tool …" — any tool use.
+  // ● is Claude Code's tool-use bullet; capture everything up to ( or whitespace.
+  toolUse: /●\s*([\w][\w:]*)/,
 
-  // "✻ Baked for 3m 10s" or "✻ Cost: $0.05" — Claude finished responding
-  responseDone: /✻\s*(Baked for|Cost:)/,
+  // "✻ Baked for …" / "✻ Crunched for …" / "✻ Cost: …" — Claude finished responding.
+  // The ✻ character is unique to Claude Code's response summary line.
+  responseDone: /✻/,
 };
 
 function getOrCreate(surfaceId: SurfaceId): ClaudeActivity {
@@ -141,19 +142,10 @@ export function observePtyData(surfaceId: SurfaceId, data: string): void {
       continue;
     }
 
-    // Tool use
+    // Tool use (generic — captures any tool name after ●)
     const toolMatch = trimmed.match(PATTERNS.toolUse);
     if (toolMatch) {
       activity.lastTool = toolMatch[1];
-      activity.isDone = false;
-      changed = true;
-      continue;
-    }
-
-    // MCP tool
-    const mcpMatch = trimmed.match(PATTERNS.mcpTool);
-    if (mcpMatch) {
-      activity.lastTool = `${mcpMatch[1]}:${mcpMatch[2]}`;
       activity.isDone = false;
       changed = true;
       continue;
