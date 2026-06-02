@@ -112,6 +112,7 @@ export default function WorkspaceRow({
   // observer never saw an explicit finish marker, we assume Claude has stopped
   // (e.g. tmux was detached, or the finish line was obscured by terminal rendering).
   const HOOK_TTL = 5000;
+  const DATA_TTL = 10000; // 10s — PTY data flowing but no tool pattern matched yet
   const OBSERVER_TTL = 10 * 60 * 1000; // 10 minutes
   // Grace period for sessions where the observer is watching but has never seen
   // a tool use line. This covers the case where wmux attached after Claude was
@@ -129,6 +130,15 @@ export default function WorkspaceRow({
     return false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hookActivity, wsActivity, tick]);
+
+  // ── Claude is generating text but hasn't used a tool yet this turn ──
+  const isResponding = useMemo(() => {
+    const now = Date.now();
+    if (!wsActivity || wsActivity.isDone) return false;
+    if (wsActivity.lastTool) return false; // tool label takes priority
+    return now - wsActivity.lastDataTime < DATA_TTL;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wsActivity, tick]);
 
   // ── Current tool label (from observer or hooks) ──
   const currentToolLabel = useMemo(() => {
@@ -178,6 +188,9 @@ export default function WorkspaceRow({
     // Priority 1: Claude is actively using a tool
     if (currentToolLabel) return currentToolLabel;
 
+    // Priority 1.5: Claude is generating a response (text output, no tool yet)
+    if (isResponding) return 'Thinking...';
+
     // Priority 2: Claude was working but stopped → idle, not "Running"
     if (claudeIsIdle) return 'Idle';
 
@@ -200,7 +213,7 @@ export default function WorkspaceRow({
 
   // ── Status color class ──
   const statusClass = useMemo(() => {
-    if (currentToolLabel) return 'workspace-row__status--working';
+    if (currentToolLabel || isResponding) return 'workspace-row__status--working';
     if (claudeIsIdle) return 'workspace-row__status--idle';
     const state = workspace.shellState;
     if (state === 'running') return 'workspace-row__status--running';
@@ -227,7 +240,7 @@ export default function WorkspaceRow({
 
   // ── State dot class — pulsing when Claude is active ──
   const stateDotClass = useMemo(() => {
-    if (isClaudeActive) return 'workspace-row__state-dot--running';
+    if (isClaudeActive || isResponding) return 'workspace-row__state-dot--running';
     if (claudeIsIdle) return 'workspace-row__state-dot--idle';
     if (workspace.shellState === 'running') return 'workspace-row__state-dot--running';
     if (workspace.shellState === 'interrupted') return 'workspace-row__state-dot--interrupted';
