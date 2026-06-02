@@ -65,7 +65,7 @@ const PATTERNS = {
 function getOrCreate(surfaceId: SurfaceId): ClaudeActivity {
   let activity = activities.get(surfaceId);
   if (!activity) {
-    activity = { agents: [], activeSkill: null, lastTool: null, lastUpdate: Date.now(), lastDataTime: Date.now(), isDone: false };
+    activity = { agents: [], activeSkill: null, lastTool: null, lastUpdate: Date.now(), lastDataTime: Date.now(), isDone: true };
     activities.set(surfaceId, activity);
   }
   return activity;
