@@ -45,12 +45,12 @@ const PATTERNS = {
   skillLoad: /Skill\(([^)]+)\)/,
 
   // "● Bash(…)" / "● NotebookEdit(…)" / "● plugin:ns:tool …" — any tool use.
-  // ● is Claude Code's tool-use bullet; capture everything up to ( or whitespace.
-  toolUse: /●\s*([\w][\w:]*)/,
+  // Anchored to start of trimmed line so inline ● in response text doesn't match.
+  toolUse: /^●\s+([\w][\w:]*)/,
 
   // "✻ Baked for …" / "✻ Crunched for …" / "✻ Cost: …" — Claude finished responding.
-  // The ✻ character is unique to Claude Code's response summary line.
-  responseDone: /✻/,
+  // Anchored to start of trimmed line so inline ✻ in response text doesn't match.
+  responseDone: /^✻/,
 };
 
 function getOrCreate(surfaceId: SurfaceId): ClaudeActivity {
