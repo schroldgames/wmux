@@ -31,6 +31,7 @@ export interface ClaudeActivity {
   activeSkill: string | null;
   lastTool: string | null;
   lastUpdate: number;
+  lastDataTime: number; // updated on every PTY data chunk — detects text-only responses
   isDone: boolean; // true after "Baked for" / "Cost:" — Claude finished responding
 }
 
@@ -63,7 +64,7 @@ const PATTERNS = {
 function getOrCreate(surfaceId: SurfaceId): ClaudeActivity {
   let activity = activities.get(surfaceId);
   if (!activity) {
-    activity = { agents: [], activeSkill: null, lastTool: null, lastUpdate: Date.now(), isDone: false };
+    activity = { agents: [], activeSkill: null, lastTool: null, lastUpdate: Date.now(), lastDataTime: Date.now(), isDone: false };
     activities.set(surfaceId, activity);
   }
   return activity;
@@ -80,6 +81,7 @@ export function observePtyData(surfaceId: SurfaceId, data: string): void {
   let changed = false;
   const isFirstObservation = !activities.has(surfaceId);
   const activity = getOrCreate(surfaceId);
+  activity.lastDataTime = Date.now();
 
   for (const line of lines) {
     const trimmed = line.trim();
