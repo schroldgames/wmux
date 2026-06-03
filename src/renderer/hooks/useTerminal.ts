@@ -192,38 +192,49 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
     // Open terminal in the DOM
     terminal.open(terminalRef.current);
 
-    // Always scroll wmux's buffer on wheel — never forward to the app.
-    // Without this, when a TUI (Claude Code, vim, tmux…) enables mouse
-    // tracking via DECSET 1000/1002/1003/1006, xterm.js sends wheel
-    // events to the app instead of scrolling the buffer (see
-    // @xterm/xterm Terminal.ts wheel handler: `if (requestedEvents.wheel) return`).
-    // That has two visible effects: scrollback is dead, AND the app paints
-    // a cell highlight that tracks the mouse cursor. We intercept on the
-    // capture phase before xterm's listener runs.
+    // Wheel handler — capture phase, passive:false so we can preventDefault.
+    //
+    // Normal buffer: intercept and scroll wmux's scrollback buffer directly.
+    //
+    // Alternate buffer (tmux, vim, htop…): xterm's own handler must receive the
+    // event to encode it as a mouse-wheel report and write it to the PTY. However,
+    // when a <webview> element is present in the same Electron window, Chromium can
+    // route un-prevented wheel events to the webview's renderer process instead of
+    // letting them propagate to xterm — breaking tmux scroll.
+    // Fix: always preventDefault/stopPropagation on the ORIGINAL (trusted) event,
+    // then re-dispatch a synthetic WheelEvent directly on xterm's container. A
+    // JS-created event (isTrusted===false) cannot be routed to the webview — it
+    // stays within the main renderer's DOM — so xterm receives it and forwards to
+    // the PTY normally. The isTrusted guard prevents the re-dispatch from looping.
     const wheelHost = terminalRef.current;
     const onWheelCapture = (ev: WheelEvent) => {
+      if (!ev.isTrusted) return; // synthetic re-dispatch — let xterm handle it
       if (ev.deltaY === 0) return;
-      // Only hijack the wheel for scrollback on the NORMAL buffer. Full-screen
-      // TUIs (Claude Code, vim, less, htop…) switch to the ALTERNATE buffer
-      // (DECSET 1049), which has no scrollback — terminal.scrollLines() there is
-      // a no-op. If we still preventDefault/stopPropagation we also suppress
-      // xterm's native behavior of forwarding the wheel to the app (mouse-wheel
-      // reports when mouse tracking is on, otherwise arrow-key sequences), which
-      // is the ONLY way those apps scroll their own content. So on the alt
-      // buffer we fall through and let xterm handle it.
-      if (terminal.buffer.active.type !== 'normal') return;
       ev.preventDefault();
       ev.stopPropagation();
-      let amount: number;
-      if (ev.deltaMode === 1 /* DOM_DELTA_LINE */) {
-        amount = ev.deltaY;
-      } else if (ev.deltaMode === 2 /* DOM_DELTA_PAGE */) {
-        amount = ev.deltaY * (terminal.rows || 24);
+      if (terminal.buffer.active.type === 'normal') {
+        let amount: number;
+        if (ev.deltaMode === 1 /* DOM_DELTA_LINE */) {
+          amount = ev.deltaY;
+        } else if (ev.deltaMode === 2 /* DOM_DELTA_PAGE */) {
+          amount = ev.deltaY * (terminal.rows || 24);
+        } else {
+          amount = ev.deltaY / 17;
+        }
+        const lines = Math.sign(amount) * Math.max(1, Math.round(Math.abs(amount)));
+        if (lines !== 0) terminal.scrollLines(lines);
       } else {
-        amount = ev.deltaY / 17;
+        // Re-dispatch as synthetic so xterm's mouse-tracking handler fires
+        // without the event being intercepted by the webview renderer.
+        wheelHost?.dispatchEvent(new WheelEvent('wheel', {
+          deltaY: ev.deltaY,
+          deltaMode: ev.deltaMode,
+          clientX: ev.clientX,
+          clientY: ev.clientY,
+          bubbles: true,
+          cancelable: true,
+        }));
       }
-      const lines = Math.sign(amount) * Math.max(1, Math.round(Math.abs(amount)));
-      if (lines !== 0) terminal.scrollLines(lines);
     };
     wheelHost.addEventListener('wheel', onWheelCapture, { capture: true, passive: false });
     cleanupFnsRef.current.push(() => {
