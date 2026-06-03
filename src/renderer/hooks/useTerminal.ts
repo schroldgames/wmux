@@ -174,9 +174,6 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
     const webLinksAddon = new WebLinksAddon((event, uri) => {
       const forceExternal = !!(event as MouseEvent)?.ctrlKey || !!(event as MouseEvent)?.metaKey;
       openInWmuxBrowser(uri, { forceExternal });
-      // The browser pane's webview steals focus when its dom-ready fires (~600ms
-      // after mount). Restore terminal focus after that window passes.
-      if (!forceExternal) setTimeout(() => { try { terminal.focus(); } catch {} }, 700);
     });
     const searchAddon = new SearchAddon();
     const unicode11Addon = new Unicode11Addon();
