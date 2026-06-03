@@ -174,6 +174,9 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
     const webLinksAddon = new WebLinksAddon((event, uri) => {
       const forceExternal = !!(event as MouseEvent)?.ctrlKey || !!(event as MouseEvent)?.metaKey;
       openInWmuxBrowser(uri, { forceExternal });
+      // The browser pane's webview steals focus when its dom-ready fires (~600ms
+      // after mount). Restore terminal focus after that window passes.
+      if (!forceExternal) setTimeout(() => { try { terminal.focus(); } catch {} }, 700);
     });
     const searchAddon = new SearchAddon();
     const unicode11Addon = new Unicode11Addon();
@@ -452,6 +455,11 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
         if (dims && ptyIdRef.current) {
           window.wmux.pty.resize(ptyIdRef.current, dims.cols, dims.rows);
         }
+        // Force canvas repaint after layout change. fit() resizes xterm's
+        // dimensions but doesn't mark rows dirty, so the Canvas2D renderer
+        // won't repaint until the next keypress — leaving the terminal visually
+        // frozen after an adjacent pane is closed/resized.
+        try { terminal.refresh(0, terminal.rows - 1); } catch {}
       });
     });
 
