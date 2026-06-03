@@ -65,9 +65,8 @@ contextBridge.exposeInMainWorld('wmux', {
     },
   },
   browser: {
-    navigate: (_surfaceId: string, url: string) => {
-      // Dispatch a custom event that BrowserPane listens for
-      window.dispatchEvent(new CustomEvent('wmux:browser-navigate', { detail: { url } }));
+    navigate: (surfaceId: string, url: string) => {
+      window.dispatchEvent(new CustomEvent('wmux:browser-navigate', { detail: { url, surfaceId: surfaceId || undefined } }));
     },
   },
   agent: {
