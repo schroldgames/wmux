@@ -83,6 +83,17 @@ contextBridge.exposeInMainWorld('wmux', {
     pasteImage: () => ipcRenderer.invoke('clipboard:paste-image'),
     writeText: (text: string) => ipcRenderer.invoke('clipboard:write-text', text),
   },
+  settings: {
+    // Synchronous read so the renderer store can hydrate at module-load time.
+    getAllSync: (): Record<string, unknown> => {
+      try {
+        return ipcRenderer.sendSync('settings:get-all-sync') ?? {};
+      } catch {
+        return {};
+      }
+    },
+    set: (key: string, value: unknown) => ipcRenderer.send('settings:set', key, value),
+  },
   update: {
     getLatest: () => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_GET_LATEST),
     openRelease: (url: string) => ipcRenderer.send(IPC_CHANNELS.UPDATE_OPEN_RELEASE, url),

@@ -34,6 +34,16 @@ export default function WorkspaceSettings() {
         />
       </div>
 
+      <div className="settings-row">
+        <label className="settings-label">Show welcome screen on startup</label>
+        <input
+          type="checkbox"
+          className="settings-toggle"
+          checked={workspacePrefs.showWelcomeScreen}
+          onChange={(e) => setWorkspacePrefs({ showWelcomeScreen: e.target.checked })}
+        />
+      </div>
+
       <div className="settings-divider" />
       <h3 className="settings-section-title">Shell</h3>
 

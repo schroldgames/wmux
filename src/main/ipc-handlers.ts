@@ -15,6 +15,7 @@ import { CDPBridge } from './cdp-bridge';
 import { CDPProxy } from './cdp-proxy';
 import { AgentManager } from './agent-manager';
 import { saveNamedSession, loadNamedSession, listNamedSessions, deleteNamedSession, loadSession } from './session-persistence';
+import { loadSettings, saveSetting } from './settings-store';
 import { getChangedFiles, getFileDiff } from './diff-provider';
 
 const ptyManager = new PtyManager();
@@ -221,6 +222,16 @@ export function registerIpcHandlers(windowManager: WindowManager, cdpProxyInstan
       activeIndex: activeIndex >= 0 ? activeIndex : 0,
     };
   });
+  // Settings persistence (issue #19) — file-backed in %APPDATA%\wmux so prefs
+  // survive portable-zip updates. get-all is synchronous so the renderer's
+  // Zustand settings slice can hydrate at module-load time (no async flash).
+  ipcMain.on('settings:get-all-sync', (event) => {
+    event.returnValue = loadSettings();
+  });
+  ipcMain.on('settings:set', (_event, key: string, value: unknown) => {
+    saveSetting(key, value);
+  });
+
   ipcMain.handle(IPC_CHANNELS.SESSION_DELETE_NAMED, (_event, name: string) => {
     return deleteNamedSession(name);
   });

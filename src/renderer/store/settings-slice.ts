@@ -1,11 +1,17 @@
 import { StateCreator } from 'zustand';
 
-// ─── Persistence helpers (issue #12 + issue #15) ────────────────────────────
+// ─── Persistence helpers (issue #12 + issue #15 + issue #19) ─────────────────
 // Zustand has no persistence middleware here, so any pref that lives only in
 // state resets on every launch — which made "Default shell" (issue #12) and
-// theme/font/shortcut customizations (issue #15) feel broken. Every user
-// customization gets mirrored to localStorage; failures are swallowed so a
-// locked/sandboxed storage layer can't break the renderer boot.
+// theme/font/shortcut customizations (issue #15) feel broken.
+//
+// Settings used to live in renderer localStorage, but localStorage is scoped to
+// the page origin. wmux ships as a portable zip extracted to a new folder per
+// version, so the production `file://` origin changes between versions and
+// Chromium buckets storage by that path — font/theme customizations appeared to
+// reset on every update (issue #19). We now persist through the main process to
+// %APPDATA%\wmux\settings.json (stable across updates), and migrate any existing
+// localStorage values forward on first launch.
 
 const STORAGE_KEYS = {
   workspacePrefs:    'wmux-workspace-prefs',
@@ -16,18 +22,42 @@ const STORAGE_KEYS = {
   shortcuts:         'wmux-shortcuts',
 } as const;
 
+// Read the whole settings file once at module load (synchronous IPC). The
+// preload runs before this module, so window.wmux is already available. In
+// non-Electron contexts (tests) this is absent and we fall back to localStorage.
+function readFileSnapshot(): Record<string, any> {
+  try {
+    const snap = (globalThis as any).window?.wmux?.settings?.getAllSync?.();
+    return snap && typeof snap === 'object' ? snap : {};
+  } catch {
+    return {};
+  }
+}
+
+const FILE_SETTINGS = readFileSnapshot();
+
 function loadPersisted<T>(key: string): Partial<T> {
+  // File store is the source of truth; fall back to legacy localStorage and
+  // migrate it forward so existing users keep their customizations.
+  const fromFile = FILE_SETTINGS[key];
+  if (fromFile && typeof fromFile === 'object') return fromFile as Partial<T>;
   try {
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
     if (!raw) return {};
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    if (parsed && typeof parsed === 'object') {
+      try { (globalThis as any).window?.wmux?.settings?.set?.(key, parsed); } catch { /* no-op */ }
+      return parsed;
+    }
+    return {};
   } catch {
     return {};
   }
 }
 
 function persist<T>(key: string, value: T): void {
+  try { (globalThis as any).window?.wmux?.settings?.set?.(key, value); } catch { /* no-op */ }
+  // Keep a localStorage mirror as a harmless dev/non-Electron fallback.
   try {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(key, JSON.stringify(value));
@@ -161,12 +191,15 @@ export interface WorkspacePrefs {
   newWorkspacePlacement: 'afterCurrent' | 'top' | 'end';
   autoReorderOnNotification: boolean;
   defaultShell: string;
+  /** Show the welcome/tutorial screen on first launch (issue #22). */
+  showWelcomeScreen: boolean;
 }
 
 export const DEFAULT_WORKSPACE_PREFS: WorkspacePrefs = {
   newWorkspacePlacement: 'afterCurrent',
   autoReorderOnNotification: false,
   defaultShell: '',
+  showWelcomeScreen: true,
 };
 
 // ─── Terminal settings ────────────────────────────────────────────────────────
@@ -231,11 +264,14 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
 export interface BrowserPrefs {
   searchEngine: 'google' | 'duckduckgo' | 'bing' | 'brave';
   devToolsIcon: 'default' | 'compact' | 'hidden';
+  /** Open the browser panel automatically on startup (issue #22). */
+  openOnStartup: boolean;
 }
 
 export const DEFAULT_BROWSER_PREFS: BrowserPrefs = {
   searchEngine: 'google',
   devToolsIcon: 'default',
+  openOnStartup: true,
 };
 
 // ─── Slice interface ──────────────────────────────────────────────────────────

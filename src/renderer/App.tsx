@@ -94,7 +94,8 @@ export default function App() {
   const [focusedPaneId, setFocusedPaneId] = useState<PaneId | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  const [browserOpen, setBrowserOpen] = useState(true);
+  // Browser panel auto-opens on startup unless disabled in Settings (issue #22).
+  const [browserOpen, setBrowserOpen] = useState(() => useStore.getState().browserPrefs.openOnStartup);
   const [browserWidth, setBrowserWidth] = useState(420);
   const [isResizingBrowser, setIsResizingBrowser] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
@@ -134,9 +135,11 @@ export default function App() {
   }, [shortcuts, commandPaletteOpen]);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
 
-  // Open tutorial on first launch
+  // Open tutorial on first launch, unless the welcome screen is disabled in
+  // Settings (issue #22). The "seen" flag still prevents re-showing it.
   useEffect(() => {
-    if (!localStorage.getItem('wmux-tutorial-seen')) {
+    const showWelcome = useStore.getState().workspacePrefs.showWelcomeScreen;
+    if (showWelcome && !localStorage.getItem('wmux-tutorial-seen')) {
       setTutorialOpen(true);
     }
   }, []);
@@ -446,6 +449,7 @@ export default function App() {
             customColor: ws.customColor,
             pinned: ws.pinned,
             shell: ws.shell,
+            cwd: ws.cwd, // issue #20 — restore so new terminals reopen in the workspace folder
             splitTree: ws.splitTree,
           })),
         }],

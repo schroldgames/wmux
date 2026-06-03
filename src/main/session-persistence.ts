@@ -21,6 +21,7 @@ export interface SessionData {
       customColor?: string;
       pinned: boolean;
       shell: string;
+      cwd?: string; // last reported working dir — restored so new terminals reopen here (issue #20)
       splitTree: any; // SplitNode serialized
     }>;
   }>;

@@ -26,6 +26,19 @@ export default function BrowserSettings() {
       </div>
 
       <div className="settings-divider" />
+      <h3 className="settings-section-title">Startup</h3>
+
+      <div className="settings-row">
+        <label className="settings-label">Open browser panel on startup</label>
+        <input
+          type="checkbox"
+          className="settings-toggle"
+          checked={browserPrefs.openOnStartup}
+          onChange={(e) => setBrowserPrefs({ openOnStartup: e.target.checked })}
+        />
+      </div>
+
+      <div className="settings-divider" />
       <h3 className="settings-section-title">Developer Tools</h3>
 
       <div className="settings-row">
