@@ -10,6 +10,7 @@ import { useStore } from '../store';
 import { SplitNode, ThemeConfig } from '../../shared/types';
 import { UserColorScheme } from '../store/settings-slice';
 import { openInWmuxBrowser } from '../utils/open-in-browser';
+import { forceSyncCursorRendering } from '../utils/force-sync-cursor';
 import '@xterm/xterm/css/xterm.css';
 
 declare global {
@@ -323,6 +324,10 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
     const canvasAddon = new CanvasAddon();
     try {
       terminal.loadAddon(canvasAddon);
+      // Canvas renders the cursor in a blink-timer-driven rAF layer that lags
+      // behind typing under wmux's busy Electron renderer (issue #23). Force it
+      // to repaint synchronously like the WebGL renderer does.
+      forceSyncCursorRendering(terminal);
     } catch {
       // Canvas unavailable — xterm falls back to DOM renderer automatically
       canvasAddon.dispose();
