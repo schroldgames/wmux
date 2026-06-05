@@ -103,6 +103,11 @@ function buildXtermTheme(base: ThemeConfig, override?: UserColorScheme): ITheme 
 }
 
 const themeCache = new Map<string, ThemeConfig>();
+
+// Tracks whether mouse reporting is active for a given surface. Survives React
+// remounts so the wheel handler can distinguish tmux (mouse-enabled) from a
+// plain shell even when xterm's buffer.active.type is reset after remount.
+const surfaceMouseEnabled = new Map<string, boolean>();
 async function fetchTheme(name: string): Promise<ThemeConfig> {
   const cached = themeCache.get(name);
   if (cached) return cached;
@@ -211,10 +216,11 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
       if (ev.deltaY === 0) return;
 
       const hasWebview = !!document.querySelector('webview');
+      const isAltBuffer = terminal.buffer.active.type !== 'normal';
+      const isMouseEnabled = !!(surfaceId && surfaceMouseEnabled.get(surfaceId));
 
-      if (!hasWebview) {
-        // No webview — standard behavior
-        if (terminal.buffer.active.type !== 'normal') return; // let xterm handle
+      // Scrollback helper — used for plain-shell normal-buffer scrolling.
+      const doScrollback = () => {
         ev.preventDefault();
         ev.stopPropagation();
         let amount: number;
@@ -227,11 +233,30 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
         }
         const lines = Math.sign(amount) * Math.max(1, Math.round(Math.abs(amount)));
         if (lines !== 0) terminal.scrollLines(lines);
+      };
+
+      if (!hasWebview) {
+        // No webview — standard behavior.
+        if (isAltBuffer) return; // let xterm handle natively
+        doScrollback();
         return;
       }
 
-      // Webview present — intercept and write SGR mouse scroll to PTY.
-      // tmux (set -g mouse on) and most alt-buffer apps handle SGR wheel:
+      // Webview present — always intercept to stop Chromium routing the event
+      // to the webview compositor. Then decide how to scroll:
+      //   alt buffer or mouse-enabled → SGR escapes to PTY (tmux/vim/etc.)
+      //   plain shell (normal buffer, no mouse tracking) → scrollback
+      //
+      // We can't rely solely on buffer type here: after a React remount tmux
+      // doesn't re-send \x1b[?1049h on SIGWINCH, so xterm shows 'normal' even
+      // though tmux is drawn there. surfaceMouseEnabled survives remounts and
+      // correctly identifies mouse-active sessions.
+      if (!isAltBuffer && !isMouseEnabled) {
+        doScrollback();
+        return;
+      }
+
+      // Write SGR mouse scroll escapes to PTY.
       // \x1b[<64;col;rowM = scroll up, \x1b[<65;col;rowM = scroll down.
       ev.preventDefault();
       ev.stopPropagation();
@@ -416,6 +441,10 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
 
       // Wire PTY data → xterm
       const unsubData = window.wmux.pty.onData(id, (data: string) => {
+        // Track SGR/button mouse enable (?1006h, ?1000h, ?1002h, ?1003h) and disable (?1000l)
+        // so the wheel handler can distinguish tmux from a plain shell after remount.
+        if (/\x1b\[\?100[0236]h/.test(data)) surfaceMouseEnabled.set(id, true);
+        else if (/\x1b\[\?1000l/.test(data)) surfaceMouseEnabled.set(id, false);
         terminal.write(data);
       });
 
