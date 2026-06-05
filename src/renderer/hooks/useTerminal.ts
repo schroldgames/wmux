@@ -194,25 +194,29 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
 
     // Wheel handler — capture phase, passive:false so we can preventDefault.
     //
-    // Normal buffer: intercept and scroll wmux's scrollback buffer directly.
+    // No webview present:
+    //   normal buffer → intercept and scroll wmux's scrollback directly
+    //   alt buffer    → return early, xterm receives the event natively
     //
-    // Alternate buffer (tmux, vim, htop…): xterm's own handler must receive the
-    // event to encode it as a mouse-wheel report and write it to the PTY. However,
-    // when a <webview> element is present in the same Electron window, Chromium can
-    // route un-prevented wheel events to the webview's renderer process instead of
-    // letting them propagate to xterm — breaking tmux scroll.
-    // Fix: always preventDefault/stopPropagation on the ORIGINAL (trusted) event,
-    // then re-dispatch a synthetic WheelEvent directly on xterm's container. A
-    // JS-created event (isTrusted===false) cannot be routed to the webview — it
-    // stays within the main renderer's DOM — so xterm receives it and forwards to
-    // the PTY normally. The isTrusted guard prevents the re-dispatch from looping.
+    // Webview present:
+    //   Chromium routes un-prevented wheel events to the webview compositor,
+    //   stealing them from the terminal. We ALWAYS write SGR mouse scroll escapes
+    //   directly to the PTY regardless of buffer type. This is necessary because
+    //   after a React remount tmux doesn't re-send \x1b[?1049h on SIGWINCH (only
+    //   on a fresh client attach), so xterm's buffer.active.type stays 'normal'
+    //   even though tmux is visually drawn there — making a buffer-type check
+    //   unreliable for routing the event.
     const wheelHost = terminalRef.current;
     const onWheelCapture = (ev: WheelEvent) => {
-      if (!ev.isTrusted) return; // synthetic re-dispatch — let xterm handle it
       if (ev.deltaY === 0) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      if (terminal.buffer.active.type === 'normal') {
+
+      const hasWebview = !!document.querySelector('webview');
+
+      if (!hasWebview) {
+        // No webview — standard behavior
+        if (terminal.buffer.active.type !== 'normal') return; // let xterm handle
+        ev.preventDefault();
+        ev.stopPropagation();
         let amount: number;
         if (ev.deltaMode === 1 /* DOM_DELTA_LINE */) {
           amount = ev.deltaY;
@@ -223,17 +227,25 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
         }
         const lines = Math.sign(amount) * Math.max(1, Math.round(Math.abs(amount)));
         if (lines !== 0) terminal.scrollLines(lines);
-      } else {
-        // Re-dispatch as synthetic so xterm's mouse-tracking handler fires
-        // without the event being intercepted by the webview renderer.
-        wheelHost?.dispatchEvent(new WheelEvent('wheel', {
-          deltaY: ev.deltaY,
-          deltaMode: ev.deltaMode,
-          clientX: ev.clientX,
-          clientY: ev.clientY,
-          bubbles: true,
-          cancelable: true,
-        }));
+        return;
+      }
+
+      // Webview present — intercept and write SGR mouse scroll to PTY.
+      // tmux (set -g mouse on) and most alt-buffer apps handle SGR wheel:
+      // \x1b[<64;col;rowM = scroll up, \x1b[<65;col;rowM = scroll down.
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!ptyIdRef.current) return;
+      let linesF: number;
+      if (ev.deltaMode === 1) linesF = Math.abs(ev.deltaY);
+      else if (ev.deltaMode === 2) linesF = Math.abs(ev.deltaY) * (terminal.rows || 24);
+      else linesF = Math.abs(ev.deltaY) / 17;
+      const scrollLines = Math.max(1, Math.round(linesF));
+      const btn = ev.deltaY < 0 ? 64 : 65;
+      const col = Math.ceil(terminal.cols / 2);
+      const row = Math.ceil(terminal.rows / 2);
+      for (let i = 0; i < scrollLines; i++) {
+        window.wmux?.pty?.write?.(ptyIdRef.current, `\x1b[<${btn};${col};${row}M`);
       }
     };
     wheelHost.addEventListener('wheel', onWheelCapture, { capture: true, passive: false });
@@ -392,6 +404,12 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
     // Connect to PTY — either attach to existing (agent-spawned) or create new
     let ptyId: string | null = null;
 
+    // Pending resize dims captured by ResizeObserver before PTY is attached.
+    // When ResizeObserver fires before the IPC for pty.create/has resolves,
+    // ptyIdRef.current is null and the resize would be silently dropped. We
+    // stash the last observed dims and flush them in attachToPty instead.
+    let pendingResizeDims: { cols: number; rows: number } | null = null;
+
     const attachToPty = (id: string) => {
       ptyId = id;
       ptyIdRef.current = id;
@@ -408,12 +426,46 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
 
       cleanupFnsRef.current.push(unsubData, unsubExit);
 
-      // Initial resize after PTY is ready
-      fit();
-      const dims = fitAddon.proposeDimensions();
-      if (dims) {
-        window.wmux.pty.resize(id, dims.cols, dims.rows);
+      // Flush any resize that arrived before this PTY was ready
+      if (pendingResizeDims) {
+        window.wmux.pty.resize(id, pendingResizeDims.cols, pendingResizeDims.rows);
+        pendingResizeDims = null;
+      } else {
+        // Initial resize — retry via RAF if Canvas2D hasn't measured char size yet
+        // (proposeDimensions returns null until the first render completes).
+        // Without a successful resize tmux never gets SIGWINCH and won't redraw
+        // into the new xterm instance, leaving it stuck in normal-buffer mode.
+        const doInitialResize = (attempt = 0) => {
+          fit();
+          const dims = fitAddon.proposeDimensions();
+          if (dims) {
+            window.wmux.pty.resize(id, dims.cols, dims.rows);
+          } else if (attempt < 8) {
+            requestAnimationFrame(() => {
+              if (ptyIdRef.current === id) doInitialResize(attempt + 1);
+            });
+          }
+        };
+        doInitialResize();
       }
+
+      // Deferred visual safety-net. doInitialResize() already sent the correct
+      // PTY dimensions. This timer only ensures Canvas2D actually paints the
+      // result — terminal.refresh() marks rows dirty but relies on the render
+      // loop being active; scrollToBottom() unconditionally triggers a viewport
+      // update which forces Canvas2D to repaint the visible area regardless.
+      // No fit()/pty.resize() here: a second terminal.resize() at 300ms can
+      // return slightly different col/row counts due to sub-pixel rounding on
+      // wider containers, which clears the canvas just before the repaint fires.
+      const deferredResizeId = setTimeout(() => {
+        requestAnimationFrame(() => {
+          try {
+            terminal.scrollToBottom();
+            terminal.refresh(0, terminal.rows - 1);
+          } catch {}
+        });
+      }, 300);
+      cleanupFnsRef.current.push(() => clearTimeout(deferredResizeId));
     };
 
     // Resolve effective shell: explicit (workspace) > user default preference > main-process fallback.
@@ -460,8 +512,13 @@ export function useTerminal({ surfaceId, shell, cwd, visible = true, focused = t
         resizeRaf = null;
         fit();
         const dims = fitAddon.proposeDimensions();
-        if (dims && ptyIdRef.current) {
-          window.wmux.pty.resize(ptyIdRef.current, dims.cols, dims.rows);
+        if (dims) {
+          if (ptyIdRef.current) {
+            window.wmux.pty.resize(ptyIdRef.current, dims.cols, dims.rows);
+          } else {
+            // PTY not attached yet — stash so attachToPty can flush it
+            pendingResizeDims = { cols: dims.cols, rows: dims.rows };
+          }
         }
         // Force canvas repaint after layout change. fit() resizes xterm's
         // dimensions but doesn't mark rows dirty, so the Canvas2D renderer
