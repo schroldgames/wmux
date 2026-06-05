@@ -162,8 +162,6 @@ export default function App() {
           const { replaceAllWorkspaces } = useStore.getState();
           replaceAllWorkspaces(autoSaved.workspaces, autoSaved.activeIndex);
           if (autoSaved.sidebarWidth) setSidebarWidth(autoSaved.sidebarWidth);
-          const activeWs = autoSaved.workspaces[autoSaved.activeIndex ?? 0];
-          if (activeWs?.browserWidth) setBrowserWidth(activeWs.browserWidth);
           return;
         }
       } catch {}
@@ -463,11 +461,10 @@ export default function App() {
     return unsub;
   }, [sidebarWidth]);
 
-  // Sync browser pane width from active workspace when switching workspaces
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
-  useEffect(() => {
-    if (activeWorkspace?.browserWidth) setBrowserWidth(activeWorkspace.browserWidth);
-  }, [activeWorkspaceId]);
+  // During drag use live browserWidth state; otherwise use the persisted value from the
+  // workspace (falls back to browserWidth for workspaces that have never been resized).
+  const displayBrowserWidth = isResizingBrowser ? browserWidth : (activeWorkspace?.browserWidth ?? browserWidth);
 
   useEffect(() => {
     if (!activeWorkspace) return;
@@ -735,7 +732,7 @@ export default function App() {
                 transform: 'translateX(-50%)',
               }} />
             </div>
-            <div style={{ width: browserWidth, flexShrink: 0, overflow: 'hidden', position: 'relative' }}>
+            <div style={{ width: displayBrowserWidth, flexShrink: 0, overflow: 'hidden', position: 'relative' }}>
               {isResizingBrowser && (
                 <div style={{
                   position: 'absolute', inset: 0, zIndex: 10,
