@@ -8,21 +8,9 @@ function getAllSurfaceIds(tree: SplitNode): string[] {
   return [...getAllSurfaceIds(tree.children[0]), ...getAllSurfaceIds(tree.children[1])];
 }
 
-/** Human-readable label for a tool name */
-function getToolLabel(tool: string): string {
-  switch (tool) {
-    case 'Bash': return 'Running command...';
-    case 'Read': return 'Reading file...';
-    case 'Edit': return 'Editing...';
-    case 'Write': return 'Writing file...';
-    case 'Grep': return 'Searching code...';
-    case 'Glob': return 'Finding files...';
-    case 'Agent': return 'Running agent...';
-    case 'WebSearch': return 'Searching web...';
-    case 'WebFetch': return 'Fetching page...';
-    case 'Skill': return 'Loading skill...';
-    default: return tool.includes(':') ? `MCP: ${tool}` : `${tool}...`;
-  }
+/** Truncate a ● line to fit the sidebar status area */
+function truncateStatus(text: string, max = 55): string {
+  return text.length > max ? text.slice(0, max - 1) + '…' : text;
 }
 
 interface WorkspaceRowProps {
@@ -105,28 +93,53 @@ export default function WorkspaceRow({
     ? { backgroundColor: customColorTint }
     : {};
 
-  // How long a tool label persists after the last hook/observer event (ms)
-  const ACTIVITY_TTL = 5000;
+  // TTLs for activity display.
+  // Hooks fire once per tool use so a short TTL is fine.
+  // Observer data can go silent for minutes during long bash commands, so we
+  // use a much longer TTL. If no tool use is seen for OBSERVER_TTL ms and the
+  // observer never saw an explicit finish marker, we assume Claude has stopped
+  // (e.g. tmux was detached, or the finish line was obscured by terminal rendering).
+  const HOOK_TTL = 5000;
+  const DATA_TTL = 10000; // 10s — PTY data flowing but no tool pattern matched yet
+  const OBSERVER_TTL = 10 * 60 * 1000; // 10 minutes
+  // Grace period for sessions where the observer is watching but has never seen
+  // a tool use line. This covers the case where wmux attached after Claude was
+  // already idle — no tool use or finish marker will ever appear, so we need a
+  // timed fallback. 2 minutes is long enough for Claude's initial thinking phase
+  // before first tool use, but short enough to not feel broken.
+  const NO_TOOL_GRACE = 2 * 60 * 1000; // 2 minutes
 
-  // ── Determine if Claude is actively working (recent hook or observer data) ──
+  // ── Determine if Claude is actively working ──
   const isClaudeActive = useMemo(() => {
     const now = Date.now();
-    if (hookActivity && now - hookActivity.lastSeen < ACTIVITY_TTL) return true;
-    if (wsActivity && now - wsActivity.lastUpdate < ACTIVITY_TTL) return true;
+    if (wsActivity?.lastTool && !wsActivity.isDone && now - wsActivity.lastUpdate < OBSERVER_TTL) return true;
+    if (hookActivity && now - hookActivity.lastSeen < HOOK_TTL) return true;
+    if (wsActivity && now - wsActivity.lastUpdate < HOOK_TTL) return true;
     return false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hookActivity, wsActivity, tick]);
 
+  // ── Claude is generating text but hasn't used a tool yet this turn ──
+  const isResponding = useMemo(() => {
+    const now = Date.now();
+    if (!wsActivity || wsActivity.isDone) return false;
+    if (wsActivity.lastTool) return false; // tool label takes priority
+    return now - wsActivity.lastDataTime < DATA_TTL;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wsActivity, tick]);
+
   // ── Current tool label (from observer or hooks) ──
   const currentToolLabel = useMemo(() => {
     const now = Date.now();
-    // Prefer observer data (more specific — comes from PTY output parsing)
-    if (wsActivity?.lastTool && now - wsActivity.lastUpdate < ACTIVITY_TTL) {
-      return getToolLabel(wsActivity.lastTool);
+    // Observer: show last tool label while Claude is running, up to OBSERVER_TTL.
+    // Longer than HOOK_TTL to survive silent periods (long bash commands, API calls).
+    // Falls back to idle detection when the TTL expires and no finish marker was seen.
+    if (wsActivity?.lastTool && now - wsActivity.lastUpdate < OBSERVER_TTL) {
+      return truncateStatus(wsActivity.lastTool);
     }
-    // Fall back to hook data
-    if (hookActivity?.lastTool && now - hookActivity.lastSeen < ACTIVITY_TTL) {
-      return getToolLabel(hookActivity.lastTool);
+    // Hook-based: short TTL (hooks fire reliably once per tool use)
+    if (hookActivity?.lastTool && now - hookActivity.lastSeen < HOOK_TTL) {
+      return truncateStatus(hookActivity.lastTool);
     }
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -137,10 +150,22 @@ export default function WorkspaceRow({
     if (workspace.shellState !== 'running') return false;
     // Observer saw "Baked for" / "Cost:" — Claude explicitly finished
     if (wsActivity?.isDone) return true;
+    // Observer TTL expired — finish marker was likely missed (tmux detach, rendering gap)
+    if (wsActivity?.lastTool && wsActivity.lastUpdate) {
+      const now = Date.now();
+      if (now - wsActivity.lastUpdate >= OBSERVER_TTL) return true;
+    }
+    // Observer is watching (got first PTY data) but never saw a tool use.
+    // Covers sessions where wmux attached after Claude was already idle —
+    // no future tool/finish markers will appear so we fall back to a timed grace.
+    if (wsActivity && !wsActivity.lastTool) {
+      const now = Date.now();
+      if (now - wsActivity.lastUpdate >= NO_TOOL_GRACE) return true;
+    }
     // Hook activity went stale — Claude stopped using tools
     if (hookActivity) {
       const now = Date.now();
-      return now - hookActivity.lastSeen >= ACTIVITY_TTL;
+      return now - hookActivity.lastSeen >= HOOK_TTL;
     }
     return false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -150,6 +175,9 @@ export default function WorkspaceRow({
   const statusText = useMemo(() => {
     // Priority 1: Claude is actively using a tool
     if (currentToolLabel) return currentToolLabel;
+
+    // Priority 1.5: Claude is generating a response (text output, no tool yet)
+    if (isResponding) return 'Thinking...';
 
     // Priority 2: Claude was working but stopped → idle, not "Running"
     if (claudeIsIdle) return 'Idle';
@@ -173,7 +201,7 @@ export default function WorkspaceRow({
 
   // ── Status color class ──
   const statusClass = useMemo(() => {
-    if (currentToolLabel) return 'workspace-row__status--working';
+    if (currentToolLabel || isResponding) return 'workspace-row__status--working';
     if (claudeIsIdle) return 'workspace-row__status--idle';
     const state = workspace.shellState;
     if (state === 'running') return 'workspace-row__status--running';
@@ -200,7 +228,7 @@ export default function WorkspaceRow({
 
   // ── State dot class — pulsing when Claude is active ──
   const stateDotClass = useMemo(() => {
-    if (isClaudeActive) return 'workspace-row__state-dot--running';
+    if (isClaudeActive || isResponding) return 'workspace-row__state-dot--running';
     if (claudeIsIdle) return 'workspace-row__state-dot--idle';
     if (workspace.shellState === 'running') return 'workspace-row__state-dot--running';
     if (workspace.shellState === 'interrupted') return 'workspace-row__state-dot--interrupted';
