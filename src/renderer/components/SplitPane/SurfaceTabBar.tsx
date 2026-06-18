@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { SurfaceRef, SurfaceId, PaneId, WorkspaceId, QuickLaunchProfile } from '../../../shared/types';
+import { SurfaceRef, SurfaceId, PaneId, WorkspaceId, QuickLaunchProfile, ShellInfo } from '../../../shared/types';
 import { useStore } from '../../store';
 
 interface SurfaceTabBarProps {
@@ -11,6 +11,8 @@ interface SurfaceTabBarProps {
   onClose: (surfaceId: SurfaceId) => void;
   onNew: () => void;
   onNewTyped?: (type: 'terminal' | 'browser' | 'markdown') => void;
+  shells?: ShellInfo[];
+  onNewShell?: (shell: ShellInfo) => void;
   /** Quick-launch profiles surfaced in the `+` caret dropdown (issue #32). */
   profiles?: QuickLaunchProfile[];
   onNewProfile?: (profile: QuickLaunchProfile) => void;
@@ -68,6 +70,8 @@ export default function SurfaceTabBar({
   onClose,
   onNew,
   onNewTyped,
+  shells,
+  onNewShell,
   profiles,
   onNewProfile,
   onClosePane,
@@ -149,6 +153,11 @@ export default function SurfaceTabBar({
     if (onNewTyped) onNewTyped(type);
     else onNew();
   }, [onNewTyped, onNew]);
+
+  const pickShell = useCallback((shell: ShellInfo) => {
+    setNewMenuOpen(false);
+    onNewShell?.(shell);
+  }, [onNewShell]);
 
   const pickProfile = useCallback((profile: QuickLaunchProfile) => {
     setNewMenuOpen(false);
@@ -293,9 +302,20 @@ export default function SurfaceTabBar({
           </button>
           {newMenuOpen && (
             <div className="surface-tab-bar__new-menu" role="menu">
-              <button role="menuitem" onClick={() => pickNew('terminal')}>
-                <span className="surface-tab-bar__new-menu-icon">{surfaceIcon('terminal', false)}</span> Terminal
-              </button>
+              {shells && shells.length > 0 ? (
+                <>
+                  {shells.map((shell) => (
+                    <button key={shell.command} role="menuitem" onClick={() => pickShell(shell)}>
+                      <span className="surface-tab-bar__new-menu-icon">{surfaceIcon('terminal', false)}</span> {shell.name}
+                    </button>
+                  ))}
+                  <div className="surface-tab-bar__new-menu-sep" role="separator" />
+                </>
+              ) : (
+                <button role="menuitem" onClick={() => pickNew('terminal')}>
+                  <span className="surface-tab-bar__new-menu-icon">{surfaceIcon('terminal', false)}</span> Terminal
+                </button>
+              )}
               <button role="menuitem" onClick={() => pickNew('browser')}>
                 <span className="surface-tab-bar__new-menu-icon">{surfaceIcon('browser', false)}</span> Browser
               </button>
