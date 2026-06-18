@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { SurfaceRef, SurfaceId, PaneId, WorkspaceId, QuickLaunchProfile, ShellInfo } from '../../../shared/types';
 import { useStore } from '../../store';
+import { IconAdd, IconSplit, IconSplitDown, IconClose, IconCaret } from './icons';
 
 interface SurfaceTabBarProps {
   paneId: PaneId;
@@ -12,6 +13,7 @@ interface SurfaceTabBarProps {
   onClose: (surfaceId: SurfaceId) => void;
   onNew: () => void;
   onNewTyped?: (type: 'terminal' | 'browser' | 'markdown') => void;
+  /** Detected shells surfaced in the `+` caret dropdown (PR #43). */
   shells?: ShellInfo[];
   onNewShell?: (shell: ShellInfo) => void;
   /** Quick-launch profiles surfaced in the `+` caret dropdown (issue #32). */
@@ -87,11 +89,15 @@ export default function SurfaceTabBar({
   const [insertIndex, setInsertIndex] = useState<number | null>(null);
   const [renamingId, setRenamingId] = useState<SurfaceId | null>(null);
   const [renameValue, setRenameValue] = useState('');
-  const [newMenuOpen, setNewMenuOpen] = useState(false);
-  const [menuPos, setMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  // Which control-cluster dropdown is open, and where to anchor it (issue #34).
+  // Menus render through a portal to document.body so the tab bar's
+  // `overflow: hidden` can no longer clip them (the old caret-dropdown bug).
+  const [openMenu, setOpenMenu] = useState<'new' | 'layout' | null>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
-  const newMenuRef = useRef<HTMLDivElement>(null);
-  const caretRef = useRef<HTMLButtonElement>(null);
+  const newCaretRef = useRef<HTMLButtonElement>(null);
+  const layoutCaretRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const agentMeta = useStore((state) => state.agentMeta);
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
   const renameSurface = useStore((state) => state.renameSurface);
@@ -136,36 +142,63 @@ export default function SurfaceTabBar({
     }
   }, [renamingId]);
 
-  // Close the "new surface" menu on outside click or Escape
+  // Toggle a portalled dropdown, anchoring it to the trigger caret button.
+  const toggleMenu = useCallback((menu: 'new' | 'layout', ref: React.RefObject<HTMLButtonElement | null>) => {
+    if (openMenu === menu) { setOpenMenu(null); return; }
+    const rect = ref.current?.getBoundingClientRect();
+    if (rect) {
+      setMenuPos({ top: rect.bottom + 2, right: Math.max(4, window.innerWidth - rect.right) });
+    }
+    setOpenMenu(menu);
+  }, [openMenu]);
+
+  // Close any open dropdown on outside click, Escape, or viewport change.
+  // Clicks inside the menu or on either caret are ignored (the caret's own
+  // onClick handles toggling).
   useEffect(() => {
-    if (!newMenuOpen) return;
+    if (!openMenu) return;
     const onDown = (e: MouseEvent) => {
-      if (newMenuRef.current && !newMenuRef.current.contains(e.target as Node)) setNewMenuOpen(false);
+      const t = e.target as Node;
+      if (menuRef.current?.contains(t)) return;
+      if (newCaretRef.current?.contains(t)) return;
+      if (layoutCaretRef.current?.contains(t)) return;
+      setOpenMenu(null);
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setNewMenuOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpenMenu(null); };
+    const onViewportChange = () => setOpenMenu(null);
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onViewportChange);
+    window.addEventListener('scroll', onViewportChange, true);
     return () => {
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onViewportChange);
+      window.removeEventListener('scroll', onViewportChange, true);
     };
-  }, [newMenuOpen]);
+  }, [openMenu]);
 
   const pickNew = useCallback((type: 'terminal' | 'browser' | 'markdown') => {
-    setNewMenuOpen(false);
+    setOpenMenu(null);
     if (onNewTyped) onNewTyped(type);
     else onNew();
   }, [onNewTyped, onNew]);
 
   const pickShell = useCallback((shell: ShellInfo) => {
-    setNewMenuOpen(false);
+    setOpenMenu(null);
     onNewShell?.(shell);
   }, [onNewShell]);
 
   const pickProfile = useCallback((profile: QuickLaunchProfile) => {
-    setNewMenuOpen(false);
+    setOpenMenu(null);
     onNewProfile?.(profile);
   }, [onNewProfile]);
+
+  const pickSplit = useCallback((dir: 'right' | 'down') => {
+    setOpenMenu(null);
+    if (dir === 'right') onSplitRight?.();
+    else onSplitDown?.();
+  }, [onSplitRight, onSplitDown]);
 
   // Always show tab bar (even for 1 surface — like browser tabs)
   return (
@@ -283,119 +316,140 @@ export default function SurfaceTabBar({
         })}
       </div>
 
-      <button
-        className="surface-tab-bar__new-btn"
-        onClick={onNew}
-        tabIndex={-1}
-        title="New terminal tab (Ctrl+T)"
-      >
-        +
-      </button>
-      {onNewTyped && (
-        <div className="surface-tab-bar__new-menu-wrap">
+      <div className="surface-tab-bar__cluster">
+        {/* New (split-button): main click = default terminal, caret = type/shell/profile menu */}
+        <div className="surface-tab-bar__group">
           <button
-            ref={caretRef}
-            className="surface-tab-bar__new-caret"
-            onClick={() => {
-              if (caretRef.current) {
-                const r = caretRef.current.getBoundingClientRect();
-                const menuWidth = 160;
-                const left = r.right + menuWidth > window.innerWidth
-                  ? r.right - menuWidth
-                  : r.left;
-                setMenuPos({ top: r.bottom + 2, left });
-              }
-              setNewMenuOpen((v) => !v);
-            }}
+            className="surface-tab-bar__ctl surface-tab-bar__ctl--new"
+            onClick={onNew}
             tabIndex={-1}
-            aria-haspopup="menu"
-            aria-expanded={newMenuOpen}
-            title="New tab type…"
+            title="New terminal tab (Ctrl+T)"
           >
-            ▾
+            <IconAdd />
           </button>
-          {newMenuOpen && createPortal(
-            <div
-              ref={newMenuRef}
-              className="surface-tab-bar__new-menu"
-              role="menu"
-              style={{ position: 'fixed', top: menuPos.top, left: menuPos.left, zIndex: 9999 }}
+          {onNewTyped && (
+            <button
+              ref={newCaretRef}
+              className="surface-tab-bar__ctl surface-tab-bar__caret"
+              onClick={() => toggleMenu('new', newCaretRef)}
+              tabIndex={-1}
+              aria-haspopup="menu"
+              aria-expanded={openMenu === 'new'}
+              title="New tab type…"
             >
+              <IconCaret />
+            </button>
+          )}
+        </div>
+
+        {/* Layout (split-button): main click = split right, caret = right/down menu */}
+        {onSplitRight && (
+          <div className="surface-tab-bar__group">
+            <button
+              className="surface-tab-bar__ctl surface-tab-bar__ctl--layout"
+              onClick={onSplitRight}
+              tabIndex={-1}
+              title="Split right (Ctrl+D)"
+            >
+              <IconSplit />
+            </button>
+            <button
+              ref={layoutCaretRef}
+              className="surface-tab-bar__ctl surface-tab-bar__caret"
+              onClick={() => toggleMenu('layout', layoutCaretRef)}
+              tabIndex={-1}
+              aria-haspopup="menu"
+              aria-expanded={openMenu === 'layout'}
+              title="Split layout…"
+            >
+              <IconCaret />
+            </button>
+          </div>
+        )}
+
+        {/* Close pane */}
+        {onClosePane && (
+          <button
+            className="surface-tab-bar__ctl surface-tab-bar__ctl--close"
+            onClick={onClosePane}
+            tabIndex={-1}
+            title="Close pane"
+          >
+            <IconClose />
+          </button>
+        )}
+      </div>
+
+      {openMenu && menuPos && createPortal(
+        <div
+          ref={menuRef}
+          className="surface-tab-menu"
+          role="menu"
+          style={{ position: 'fixed', top: menuPos.top, right: menuPos.right }}
+        >
+          {openMenu === 'new' ? (
+            <>
               {shells && shells.length > 0 ? (
                 <>
                   {shells.map((shell) => (
                     <button key={shell.command} role="menuitem" onClick={() => pickShell(shell)}>
-                      <span className="surface-tab-bar__new-menu-icon">{surfaceIcon('terminal', false)}</span> {shell.name}
+                      <span className="surface-tab-menu__icon">{surfaceIcon('terminal', false)}</span> {shell.name}
                     </button>
                   ))}
-                  <div className="surface-tab-bar__new-menu-sep" role="separator" />
+                  <div className="surface-tab-menu__sep" role="separator" />
                 </>
               ) : (
                 <button role="menuitem" onClick={() => pickNew('terminal')}>
-                  <span className="surface-tab-bar__new-menu-icon">{surfaceIcon('terminal', false)}</span> Terminal
+                  <span className="surface-tab-menu__icon">{surfaceIcon('terminal', false)}</span> Terminal
                 </button>
               )}
               <button role="menuitem" onClick={() => pickNew('browser')}>
-                <span className="surface-tab-bar__new-menu-icon">{surfaceIcon('browser', false)}</span> Browser
+                <span className="surface-tab-menu__icon">{surfaceIcon('browser', false)}</span> Browser
               </button>
               <button role="menuitem" onClick={() => pickNew('markdown')}>
-                <span className="surface-tab-bar__new-menu-icon">{surfaceIcon('markdown', false)}</span> Markdown
+                <span className="surface-tab-menu__icon">{surfaceIcon('markdown', false)}</span> Markdown
               </button>
               {profiles && profiles.length > 0 && (
                 <>
-                  <div className="surface-tab-bar__new-menu-sep" role="separator" />
+                  <div className="surface-tab-menu__sep" role="separator" />
                   {profiles.map((profile) => (
                     <button
                       key={profile.id}
                       role="menuitem"
-                      className="surface-tab-bar__new-menu-profile"
+                      className="surface-tab-menu__profile"
                       onClick={() => pickProfile(profile)}
                       title={profile.source === 'project' ? 'Project profile (.wmux.json)' : 'Global profile'}
                     >
-                      <span className="surface-tab-bar__new-menu-icon">
+                      <span className="surface-tab-menu__icon">
                         {profile.icon || surfaceIcon(profile.type, false)}
                       </span>
-                      <span className="surface-tab-bar__new-menu-profile-name">{profile.name}</span>
+                      <span className="surface-tab-menu__profile-name">{profile.name}</span>
                       {profile.source === 'project' && (
-                        <span className="surface-tab-bar__new-menu-badge">project</span>
+                        <span className="surface-tab-menu__badge">project</span>
                       )}
                     </button>
                   ))}
                 </>
               )}
-            </div>
-          , document.body)}
-        </div>
-      )}
-      {onSplitRight && (
-        <button
-          className="surface-tab-bar__split-btn"
-          onClick={onSplitRight}
-          tabIndex={-1}
-          title="Split right (Ctrl+D)"
-        >
-          ⏐
-        </button>
-      )}
-      {onSplitDown && (
-        <button
-          className="surface-tab-bar__split-btn"
-          onClick={onSplitDown}
-          tabIndex={-1}
-          title="Split down (Ctrl+Shift+D)"
-        >
-          ⎯
-        </button>
-      )}
-      {onClosePane && (
-        <button
-          className="surface-tab-bar__close-pane-btn"
-          onClick={onClosePane}
-          tabIndex={-1}
-          title="Close pane"
-        >
-          ×
-        </button>
+            </>
+          ) : (
+            <>
+              <button role="menuitem" onClick={() => pickSplit('right')}>
+                <span className="surface-tab-menu__icon"><IconSplit size={15} /></span>
+                Split right
+                <span className="surface-tab-menu__kbd">Ctrl+D</span>
+              </button>
+              {onSplitDown && (
+                <button role="menuitem" onClick={() => pickSplit('down')}>
+                  <span className="surface-tab-menu__icon"><IconSplitDown size={15} /></span>
+                  Split down
+                  <span className="surface-tab-menu__kbd">Ctrl+Shift+D</span>
+                </button>
+              )}
+            </>
+          )}
+        </div>,
+        document.body,
       )}
     </div>
   );
