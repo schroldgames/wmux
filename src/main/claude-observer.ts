@@ -7,9 +7,17 @@
 import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS, SurfaceId } from '../shared/types';
 
-// Strip ANSI escape codes from terminal output
+// Strip ANSI/VT escape sequences from terminal output.
+// Cursor-movement sequences are replaced with a space so that words written
+// via cursor-addressing (no literal spaces between them) don't concatenate.
 function stripAnsi(str: string): string {
-  return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+  return str
+    .replace(/\x1b\[[0-9;?]*[A-HJKSTfhlmnsu]/g, ' ') // CSI cursor/mode → space
+    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')            // remaining CSI (colors etc.)
+    .replace(/\x1b\][^\x07]*\x07/g, '')               // OSC: ESC ] ... BEL
+    .replace(/\x1b[()][0-9A-Za-z]/g, '')                // Char set: ESC ( X
+    .replace(/\x1b[^[\]()]/g, '')                       // Other 2-char ESC sequences
+    .replace(/\r/g, ' ');                                // CR → space
 }
 
 export interface AgentActivity {
@@ -24,6 +32,7 @@ export interface ClaudeActivity {
   activeSkill: string | null;
   lastTool: string | null;
   lastUpdate: number;
+  lastDataTime: number; // updated on every PTY data chunk — detects text-only responses
   isDone: boolean; // true after "Baked for" / "Cost:" — Claude finished responding
 }
 
@@ -44,18 +53,20 @@ const PATTERNS = {
   // "Skill(name)" or "Skill(ns:name)"
   skillLoad: /Skill\(([^)]+)\)/,
 
-  // "● Bash(...)" or "● plugin:name:tool (MCP)"
-  toolUse: /●\s*(Bash|Read|Write|Edit|Grep|Glob|Agent|WebSearch|WebFetch)\s*\(/,
-  mcpTool: /●\s*plugin:([^:]+):([^\s]+)/,
+  // "● Bash(ls)" / "● Trimmed from 35 entries…" — any ● line from Claude.
+  // Captures full text after the bullet so it can be shown verbatim in the sidebar.
+  // Anchored to start of trimmed line so inline ● in response text doesn't match.
+  toolUse: /^●\s+(.+)/,
 
-  // "✻ Baked for 3m 10s" or "✻ Cost: $0.05" — Claude finished responding
-  responseDone: /✻\s*(Baked for|Cost:)/,
+  // "✻ Baked for …" / "✻ Crunched for …" / "✻ Cost: …" — Claude finished responding.
+  // Anchored to start of trimmed line so inline ✻ in response text doesn't match.
+  responseDone: /^✻/,
 };
 
 function getOrCreate(surfaceId: SurfaceId): ClaudeActivity {
   let activity = activities.get(surfaceId);
   if (!activity) {
-    activity = { agents: [], activeSkill: null, lastTool: null, lastUpdate: Date.now(), isDone: false };
+    activity = { agents: [], activeSkill: null, lastTool: null, lastUpdate: Date.now(), lastDataTime: Date.now(), isDone: true };
     activities.set(surfaceId, activity);
   }
   return activity;
@@ -70,20 +81,40 @@ export function observePtyData(surfaceId: SurfaceId, data: string): void {
   const lines = clean.split('\n');
 
   let changed = false;
+  const isFirstObservation = !activities.has(surfaceId);
   const activity = getOrCreate(surfaceId);
+  const now = Date.now();
+  const prevDataTime = activity.lastDataTime;
+  activity.lastDataTime = now;
+  // Broadcast data-flow updates at most once per second so the renderer can
+  // show a responding indicator even during text-only (no ●) responses.
+  const dataFlowChanged = now - prevDataTime > 1000;
 
+  // ── Chunk-level search for ● and ✻ ─────────────────────────────────────────
+  // Live tmux output uses cursor-positioning sequences instead of newlines, so
+  // line-splitting misses these markers. Search the whole stripped chunk directly
+  // and let the last occurrence in the chunk win (chronological order).
+  const lastBullet = clean.lastIndexOf('●');
+  const lastDone   = clean.lastIndexOf('✻');
+
+  if (lastDone >= 0 && (lastBullet < 0 || lastDone > lastBullet)) {
+    // ✻ was the last event — response finished
+    activity.isDone = true;
+    changed = true;
+  } else if (lastBullet >= 0) {
+    // ● was the last event — extract text after it
+    const raw = clean.slice(lastBullet + 1).split(/[●✻]/)[0].replace(/[\x00-\x1f]/g, ' ').trim();
+    if (raw.length > 1) {
+      activity.lastTool = raw.slice(0, 100);
+      activity.isDone = false;
+      changed = true;
+    }
+  }
+
+  // ── Line-level search for agent/skill patterns ───────────────────────────
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-
-    // Response done ("✻ Baked for …" / "✻ Cost: …")
-    if (PATTERNS.responseDone.test(trimmed)) {
-      activity.isDone = true;
-      activity.lastTool = null;
-      activity.activeSkill = null;
-      changed = true;
-      continue;
-    }
 
     // Agent batch start
     const batchMatch = trimmed.match(PATTERNS.agentBatchStart);
@@ -115,7 +146,6 @@ export function observePtyData(surfaceId: SurfaceId, data: string): void {
 
     // Agent done
     if (PATTERNS.agentDone.test(trimmed)) {
-      // Mark the last agent as done
       const lastAgent = activity.agents[activity.agents.length - 1];
       if (lastAgent && !lastAgent.done) {
         lastAgent.done = true;
@@ -139,28 +169,16 @@ export function observePtyData(surfaceId: SurfaceId, data: string): void {
       changed = true;
       continue;
     }
-
-    // Tool use
-    const toolMatch = trimmed.match(PATTERNS.toolUse);
-    if (toolMatch) {
-      activity.lastTool = toolMatch[1];
-      activity.isDone = false;
-      changed = true;
-      continue;
-    }
-
-    // MCP tool
-    const mcpMatch = trimmed.match(PATTERNS.mcpTool);
-    if (mcpMatch) {
-      activity.lastTool = `${mcpMatch[1]}:${mcpMatch[2]}`;
-      activity.isDone = false;
-      changed = true;
-      continue;
-    }
   }
 
   if (changed) {
     activity.lastUpdate = Date.now();
+  }
+  // Broadcast on first observation even without pattern matches so the renderer
+  // gets a baseline record. Without this, wsActivity stays null forever for
+  // sessions where Claude was already idle when wmux attached (no tool use lines
+  // will ever flow through, so claudeIsIdle can never trigger).
+  if (changed || isFirstObservation || dataFlowChanged) {
     broadcast(surfaceId, activity);
   }
 }
